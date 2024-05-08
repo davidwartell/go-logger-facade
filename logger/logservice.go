@@ -361,23 +361,8 @@ func (s *Singleton) Info(msg string, fields ...Field) {
 	}
 }
 
-func fieldsContainContextCancelled(fields ...Field) bool {
-	for i := range fields {
-		if fields[i].Type == zapcore.ErrorType {
-			fieldErr, fieldIsError := fields[i].Interface.(error)
-			if fieldIsError && fieldErr != nil && strings.Contains(fieldErr.Error(), "context canceled") {
-				return true
-			}
-		}
-	}
-	return false
-}
-
 func (s *Singleton) InfoIgnoreCancel(ctx context.Context, msg string, fields ...Field) {
 	if ctx.Err() != nil {
-		return
-	}
-	if fieldsContainContextCancelled(fields...) {
 		return
 	}
 	s.Info(msg, fields...)
@@ -397,9 +382,6 @@ func (s *Singleton) WarnIgnoreCancel(ctx context.Context, msg string, fields ...
 	if ctx.Err() != nil {
 		return
 	}
-	if fieldsContainContextCancelled(fields...) {
-		return
-	}
 	s.Warn(msg, fields...)
 }
 
@@ -415,9 +397,6 @@ func (s *Singleton) Error(msg string, fields ...Field) {
 
 func (s *Singleton) ErrorIgnoreCancel(ctx context.Context, msg string, fields ...Field) {
 	if ctx.Err() != nil {
-		return
-	}
-	if fieldsContainContextCancelled(fields...) {
 		return
 	}
 	s.Error(msg, fields...)
