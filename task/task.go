@@ -7,11 +7,13 @@ import (
 	"strings"
 )
 
+// Task is deprecated
 type Task interface {
 	StartTask()
 	StopTask()
 }
 
+// BaseTask is deprecated
 type BaseTask struct{}
 
 // LogTraceStruct deprecated
@@ -70,6 +72,8 @@ func LogErrorStructIgnoreCancel(ctx context.Context, taskName string, msg string
 	logger.Instance().ErrorIgnoreCancel(ctx, getTaskLogPrefix(taskName, msg), fieldsWithService...)
 }
 
+// HandlePanic deprecated
+//
 //goland:noinspection GoUnusedExportedFunction
 func HandlePanic(taskName string) {
 	if err := recover(); err != nil {
@@ -77,48 +81,64 @@ func HandlePanic(taskName string) {
 	}
 }
 
+// LogTrace deprecated
+//
 //goland:noinspection GoUnusedExportedFunction
 func LogTrace(taskName string, msg string, fields ...logger.Field) {
 	fieldsWithService := append(fields, logger.String("task", taskName))
 	logger.Instance().Trace(getTaskLogPrefix(taskName, msg), fieldsWithService...)
 }
 
+// LogDebug deprecated
+//
 //goland:noinspection GoUnusedExportedFunction
 func LogDebug(taskName string, msg string, fields ...logger.Field) {
 	fieldsWithService := append(fields, logger.String("task", taskName))
 	logger.Instance().Debug(getTaskLogPrefix(taskName, msg), fieldsWithService...)
 }
 
+// LogInfo deprecated
+//
 //goland:noinspection GoUnusedExportedFunction
 func LogInfo(taskName string, msg string, fields ...logger.Field) {
 	fieldsWithService := append(fields, logger.String("task", taskName))
 	logger.Instance().Info(getTaskLogPrefix(taskName, msg), fieldsWithService...)
 }
 
+// LogInfoIgnoreCancel deprecated
+//
 //goland:noinspection GoUnusedExportedFunction
 func LogInfoIgnoreCancel(ctx context.Context, taskName string, msg string, fields ...logger.Field) {
 	fieldsWithService := append(fields, logger.String("task", taskName))
 	logger.Instance().InfoIgnoreCancel(ctx, getTaskLogPrefix(taskName, msg), fieldsWithService...)
 }
 
+// LogWarn deprecated
+//
 //goland:noinspection GoUnusedExportedFunction
 func LogWarn(taskName string, msg string, fields ...logger.Field) {
 	fieldsWithService := append(fields, logger.String("task", taskName))
 	logger.Instance().Warn(getTaskLogPrefix(taskName, msg), fieldsWithService...)
 }
 
+// LogWarnIgnoreCancel deprecated
+//
 //goland:noinspection GoUnusedExportedFunction
 func LogWarnIgnoreCancel(ctx context.Context, taskName string, msg string, fields ...logger.Field) {
 	fieldsWithService := append(fields, logger.String("task", taskName))
 	logger.Instance().WarnIgnoreCancel(ctx, getTaskLogPrefix(taskName, msg), fieldsWithService...)
 }
 
+// LogError deprecated
+//
 //goland:noinspection GoUnusedExportedFunction
 func LogError(taskName string, msg string, fields ...logger.Field) {
 	fieldsWithService := append(fields, logger.String("task", taskName))
 	logger.Instance().Error(getTaskLogPrefix(taskName, msg), fieldsWithService...)
 }
 
+// LogErrorIgnoreCancel deprecated
+//
 //goland:noinspection GoUnusedExportedFunction
 func LogErrorIgnoreCancel(ctx context.Context, taskName string, msg string, fields ...logger.Field) {
 	fieldsWithService := append(fields, logger.String("task", taskName))

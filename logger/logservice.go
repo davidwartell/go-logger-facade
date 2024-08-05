@@ -1,10 +1,9 @@
 // Package logger Provides structured & deprecated unstructured logging facade to facilitate logging to different
-// providers and multiple loggers.
+// providers and multiple instances.
 package logger
 
 import (
 	"context"
-	"fmt"
 	"github.com/mattn/go-colorable"
 	"github.com/natefinch/lumberjack"
 	backupLogger "github.com/sirupsen/logrus"
@@ -23,34 +22,6 @@ const (
 	debugConsoleKey = "debug-console"
 	fileKey         = "file"
 	jsonStdoutKey   = "json-stdout"
-)
-
-// A Level is a logging priority. Higher levels are more important.
-type Level int8
-
-//goland:noinspection GoUnusedConst
-const (
-	// DebugLevel logs are typically voluminous, and are usually disabled in
-	// production.
-	DebugLevel Level = iota - 1
-	// InfoLevel is the default logging priority.
-	InfoLevel
-	// WarnLevel logs are more important than Info, but don't need individual
-	// human review.
-	WarnLevel
-	// ErrorLevel logs are high-priority. If an application is running smoothly,
-	// it shouldn't generate any error-level logs.
-	ErrorLevel
-	// DPanicLevel logs are particularly important errors. In development the
-	// logger panics after writing the message.
-	DPanicLevel
-	// PanicLevel logs a message, then panics.
-	PanicLevel
-	// FatalLevel logs a message, then calls os.Exit(1).
-	FatalLevel
-
-	//_minLevel = DebugLevel
-	//_maxLevel = FatalLevel
 
 	DefaultAppShortName = "hello-world"
 	taskName            = "Logging Service"
@@ -62,80 +33,62 @@ type LogInstance struct {
 	enabled *atomic.Bool
 }
 
-type Singleton struct {
-	sync.RWMutex
-	started bool
-	loggers map[string]*LogInstance
-	options *Options
+type Logger struct {
+	startMutex sync.RWMutex // locks start/stop
+	started    bool
+	cfg        atomic.Pointer[loggerConfig]
 }
 
-type LoggingOption func(o *Options)
-
-type Options struct {
-	productNameShort string
-	samplingEnabled  bool
-	samplingOptions  SamplingOptions
+func (s *Logger) config() *loggerConfig {
+	cfg := s.cfg.Load()
+	if cfg == nil {
+		// panic no config loaded
+		panic("logger: no config loaded")
+	}
+	return cfg
 }
 
-type SamplingOptions struct {
-	Tick       time.Duration
-	First      int
-	Thereafter int
+func (s *Logger) setConfig(cfg *loggerConfig) {
+	s.cfg.Store(cfg)
 }
 
-var instance *Singleton
+var instance *Logger
 var once sync.Once
 
-// WithProductNameShort sets the name of your product used in log file names.
-// example: logger.Instance().StartTask(logger.WithProductNameShort("your-product-name-here"))
-//
-//goland:noinspection GoUnusedExportedFunction
-func WithProductNameShort(productNameShort string) LoggingOption {
-	return func(o *Options) {
-		o.productNameShort = productNameShort
-	}
-}
-
-//goland:noinspection GoUnusedExportedFunction
-func WithSampling(samplingOptions SamplingOptions) LoggingOption {
-	return func(o *Options) {
-		o.samplingOptions = samplingOptions
-		o.samplingEnabled = true
-	}
-}
-
-func (s *Singleton) StartTask(opts ...LoggingOption) {
+func (s *Logger) StartTask(opts ...LoggingOption) {
 	var err error
-	s.Lock()
+	s.startMutex.Lock()
 	if s.started {
 		// if already started do nothing
-		s.Unlock()
+		s.startMutex.Unlock()
 		return
 	}
 
+	cfg := s.config().clone()
+
 	// apply options
 	for _, opt := range opts {
-		opt(s.options)
+		opt(cfg.options)
 	}
 
 	//
 	// debug console logger
 	//
-	s.loggers[debugConsoleKey] = &LogInstance{
+	cfg.instances[debugConsoleKey] = &LogInstance{
 		enabled: atomic.NewBool(false),
 	}
-	s.loggers[debugConsoleKey].level = zap.NewAtomicLevelAt(zapcore.Level(InfoLevel))
+	cfg.instances[debugConsoleKey].level = zap.NewAtomicLevelAt(zapcore.Level(InfoLevel))
 
 	consoleEncoderConfig := zap.NewDevelopmentEncoderConfig()
-	//consoleEncoderConfig.FunctionKey = "function"		// uncomment this to enable calling function like: github.com/foo/bar/foo/slogger.(*Singleton).ErrorUnstruct
+	//consoleEncoderConfig.FunctionKey = "function"		// uncomment this to enable calling function like: github.com/foo/bar/foo/slogger.(*Logger).ErrorUnstruct
 	consoleEncoderConfig.EncodeLevel = zapcore.CapitalColorLevelEncoder
 	consoleEncoderConfig.EncodeTime = zapcore.TimeEncoderOfLayout("2006-01-02 15:04:05.000000000 UTCZ07:00")
 
-	s.loggers[debugConsoleKey].logger = zap.New(
+	cfg.instances[debugConsoleKey].logger = zap.New(
 		zapcore.NewCore(
 			zapcore.NewConsoleEncoder(consoleEncoderConfig),
 			zapcore.AddSync(colorable.NewColorableStdout()),
-			s.loggers[debugConsoleKey].level,
+			cfg.instances[debugConsoleKey].level,
 		),
 		zap.AddCallerSkip(1),
 		zap.Development(),
@@ -146,10 +99,10 @@ func (s *Singleton) StartTask(opts ...LoggingOption) {
 	//
 	// json stdout logger
 	//
-	s.loggers[jsonStdoutKey] = &LogInstance{
+	cfg.instances[jsonStdoutKey] = &LogInstance{
 		enabled: atomic.NewBool(false),
 	}
-	s.loggers[jsonStdoutKey].level = zap.NewAtomicLevelAt(zapcore.Level(InfoLevel))
+	cfg.instances[jsonStdoutKey].level = zap.NewAtomicLevelAt(zapcore.Level(InfoLevel))
 
 	jsonStdoutEncoderConfig := zap.NewProductionEncoderConfig()
 	jsonStdoutEncoderConfig.EncodeTime = func(t time.Time, enc zapcore.PrimitiveArrayEncoder) {
@@ -158,20 +111,20 @@ func (s *Singleton) StartTask(opts ...LoggingOption) {
 	jsonStdoutLoggerCore := zapcore.NewCore(
 		zapcore.NewJSONEncoder(jsonStdoutEncoderConfig),
 		zapcore.AddSync(os.Stdout),
-		s.loggers[jsonStdoutKey].level,
+		cfg.instances[jsonStdoutKey].level,
 	)
-	if s.options.samplingEnabled {
-		jsonStdoutLoggerCore = zapcore.NewSamplerWithOptions(jsonStdoutLoggerCore, s.options.samplingOptions.Tick, s.options.samplingOptions.First, s.options.samplingOptions.Thereafter)
+	if cfg.options.samplingEnabled {
+		jsonStdoutLoggerCore = zapcore.NewSamplerWithOptions(jsonStdoutLoggerCore, cfg.options.samplingOptions.Tick, cfg.options.samplingOptions.First, cfg.options.samplingOptions.Thereafter)
 	}
-	s.loggers[jsonStdoutKey].logger = zap.New(jsonStdoutLoggerCore, zap.AddStacktrace(zap.ErrorLevel), zap.AddCaller(), zap.AddCallerSkip(1))
+	cfg.instances[jsonStdoutKey].logger = zap.New(jsonStdoutLoggerCore, zap.AddStacktrace(zap.ErrorLevel), zap.AddCaller(), zap.AddCallerSkip(1))
 
 	//
 	// file logger
 	//
-	s.loggers[fileKey] = &LogInstance{
+	cfg.instances[fileKey] = &LogInstance{
 		enabled: atomic.NewBool(false),
 	}
-	s.loggers[fileKey].level = zap.NewAtomicLevelAt(zapcore.Level(ErrorLevel))
+	cfg.instances[fileKey].level = zap.NewAtomicLevelAt(zapcore.Level(ErrorLevel))
 
 	var exPath string
 	exPath, err = os.Executable()
@@ -179,7 +132,7 @@ func (s *Singleton) StartTask(opts ...LoggingOption) {
 		backupLogger.Errorf("error creating log file failed to get current working directory: %v", err)
 	}
 	workingDir := filepath.Dir(exPath)
-	logFilePath := filepath.Join(workingDir, s.options.productNameShort+".log")
+	logFilePath := filepath.Join(workingDir, cfg.options.productNameShort+".log")
 	lumberjackSink := zapcore.AddSync(&lumberjack.Logger{
 		Filename:   logFilePath,
 		MaxSize:    10, // megabytes
@@ -195,61 +148,68 @@ func (s *Singleton) StartTask(opts ...LoggingOption) {
 	fileLoggerCore := zapcore.NewCore(
 		zapcore.NewJSONEncoder(fileEncoderConfig),
 		lumberjackSink,
-		instance.loggers[fileKey].level,
+		cfg.instances[fileKey].level,
 	)
 
-	if s.options.samplingEnabled {
-		fileLoggerCore = zapcore.NewSamplerWithOptions(fileLoggerCore, s.options.samplingOptions.Tick, s.options.samplingOptions.First, s.options.samplingOptions.Thereafter)
+	if cfg.options.samplingEnabled {
+		fileLoggerCore = zapcore.NewSamplerWithOptions(fileLoggerCore, cfg.options.samplingOptions.Tick, cfg.options.samplingOptions.First, cfg.options.samplingOptions.Thereafter)
 	}
-	instance.loggers[fileKey].logger = zap.New(fileLoggerCore, zap.AddStacktrace(zap.ErrorLevel), zap.AddCaller(), zap.AddCallerSkip(1))
+	cfg.instances[fileKey].logger = zap.New(fileLoggerCore, zap.AddStacktrace(zap.ErrorLevel), zap.AddCaller(), zap.AddCallerSkip(1))
+
+	s.setConfig(cfg)
 
 	s.started = true
-	s.Unlock()
+	s.startMutex.Unlock()
 	s.Info(getTaskLogPrefix(taskName, "started"))
 }
 
-func (s *Singleton) Sync() {
-	s.RLock()
-	for _, logInstance := range s.loggers {
+func (s *Logger) Sync() {
+	cfg := s.config()
+	for _, logInstance := range cfg.instances {
 		_ = logInstance.logger.Sync()
 	}
-	s.RUnlock()
 }
 
-func (s *Singleton) StopTask() {
-	s.Lock()
+func (s *Logger) StopTask() {
+	s.startMutex.Lock()
 	if !s.started {
 		// if not running do nothing
-		s.Unlock()
+		s.startMutex.Unlock()
 		return
 	}
 	s.started = false
-	s.Unlock()
+	s.startMutex.Unlock()
 	s.Sync()
 	s.Info(getTaskLogPrefix(taskName, "stopped"))
 }
 
-func Instance() *Singleton {
+// Instance deprecated
+func Instance() *Logger {
 	once.Do(func() {
-		instance = &Singleton{
-			loggers: make(map[string]*LogInstance),
-			options: &Options{
-				productNameShort: DefaultAppShortName,
-			},
-		}
+		instance = NewLogger()
 	})
 	return instance
 }
 
-func (s *Singleton) AddLogger(key string, w io.Writer, newLevel Level, opts ...LoggingOption) {
-	s.Lock()
-	defer s.Unlock()
+func NewLogger() *Logger {
+	logger := new(Logger)
+	logger.setConfig(&loggerConfig{
+		instances: make(map[string]*LogInstance),
+		options: &Options{
+			productNameShort: DefaultAppShortName,
+		},
+	})
+	return logger
+}
 
+func (s *Logger) AddLogger(key string, w io.Writer, newLevel Level, opts ...LoggingOption) {
+	cfg := s.config()
 	// if a logger already exists at this key do nothing
-	_, exists := instance.loggers[key]
+	_, exists := cfg.instances[key]
 	if exists {
 		return
 	}
+	cfg = cfg.clone()
 
 	// apply options
 	var addLoggerOpts Options
@@ -257,10 +217,10 @@ func (s *Singleton) AddLogger(key string, w io.Writer, newLevel Level, opts ...L
 		opt(&addLoggerOpts)
 	}
 
-	s.loggers[key] = &LogInstance{
+	cfg.instances[key] = &LogInstance{
 		enabled: atomic.NewBool(true),
 	}
-	s.loggers[key].level = zap.NewAtomicLevelAt(zapcore.Level(newLevel))
+	cfg.instances[key].level = zap.NewAtomicLevelAt(zapcore.Level(newLevel))
 
 	encoderConfig := zap.NewProductionEncoderConfig()
 	encoderConfig.EncodeTime = func(t time.Time, enc zapcore.PrimitiveArrayEncoder) {
@@ -270,463 +230,89 @@ func (s *Singleton) AddLogger(key string, w io.Writer, newLevel Level, opts ...L
 	newloggerCore := zapcore.NewCore(
 		zapcore.NewJSONEncoder(encoderConfig),
 		zapcore.AddSync(w),
-		s.loggers[key].level,
+		cfg.instances[key].level,
 	)
 	if addLoggerOpts.samplingEnabled {
-		newloggerCore = zapcore.NewSamplerWithOptions(newloggerCore, s.options.samplingOptions.Tick, s.options.samplingOptions.First, s.options.samplingOptions.Thereafter)
+		newloggerCore = zapcore.NewSamplerWithOptions(newloggerCore, cfg.options.samplingOptions.Tick, cfg.options.samplingOptions.First, cfg.options.samplingOptions.Thereafter)
 	}
 
-	s.loggers[key].logger = zap.New(newloggerCore, zap.AddStacktrace(zap.ErrorLevel), zap.AddCaller(), zap.AddCallerSkip(1))
+	cfg.instances[key].logger = zap.New(newloggerCore, zap.AddStacktrace(zap.ErrorLevel), zap.AddCaller(), zap.AddCallerSkip(1))
+
+	s.setConfig(cfg)
 }
 
-func (s *Singleton) SetLoggerEnabled(key string, enabled bool) {
-	s.RLock()
-	defer s.RUnlock()
-	if s.loggers[key] != nil {
-		s.loggers[key].enabled.Store(enabled)
+func (s *Logger) SetLoggerEnabled(key string, enabled bool) {
+	cfg := s.config()
+	if cfg.instances[key] != nil {
+		cfg.instances[key].enabled.Store(enabled)
 	}
 }
 
-func (s *Singleton) SetConsoleLogging(enabled bool) {
+func (s *Logger) SetConsoleLogging(enabled bool) {
 	s.SetLoggerEnabled(debugConsoleKey, enabled)
 }
 
-func (s *Singleton) SetJsonStdoutLogging(enabled bool) {
+func (s *Logger) SetJsonStdoutLogging(enabled bool) {
 	s.SetLoggerEnabled(jsonStdoutKey, enabled)
 }
 
-func (s *Singleton) SetFileLogging(enabled bool) {
+func (s *Logger) SetFileLogging(enabled bool) {
 	s.SetLoggerEnabled(fileKey, enabled)
 }
 
-func (s *Singleton) SetFileLogLevel(newLevel Level) {
-	s.Lock()
-	defer s.Unlock()
-	if s.loggers[fileKey] != nil {
-		s.loggers[fileKey].level.SetLevel(zapcore.Level(newLevel))
+func (s *Logger) SetFileLogLevel(newLevel Level) {
+	cfg := s.config()
+	if cfg.instances[fileKey] != nil {
+		cfg.instances[fileKey].level.SetLevel(zapcore.Level(newLevel))
 	}
 }
 
-func (s *Singleton) SetConsoleLogLevel(newLevel Level) {
-	s.Lock()
-	defer s.Unlock()
-	if s.loggers[debugConsoleKey] != nil {
-		s.loggers[debugConsoleKey].level.SetLevel(zapcore.Level(newLevel))
+func (s *Logger) SetConsoleLogLevel(newLevel Level) {
+	cfg := s.config()
+	if cfg.instances[debugConsoleKey] != nil {
+		cfg.instances[debugConsoleKey].level.SetLevel(zapcore.Level(newLevel))
 	}
 }
 
-func (s *Singleton) SetJsonStdoutLogLevel(newLevel Level) {
-	s.Lock()
-	defer s.Unlock()
-	if s.loggers[jsonStdoutKey] != nil {
-		s.loggers[jsonStdoutKey].level.SetLevel(zapcore.Level(newLevel))
+func (s *Logger) SetJsonStdoutLogLevel(newLevel Level) {
+	cfg := s.config()
+	if cfg.instances[jsonStdoutKey] != nil {
+		cfg.instances[jsonStdoutKey].level.SetLevel(zapcore.Level(newLevel))
 	}
 }
 
-func (s *Singleton) SetLogLevel(key string, newLevel Level) {
-	s.Lock()
-	defer s.Unlock()
-	if s.loggers[key] != nil {
-		s.loggers[key].level.SetLevel(zapcore.Level(newLevel))
+func (s *Logger) SetLogLevel(key string, newLevel Level) {
+	cfg := s.config()
+	if cfg.instances[key] != nil {
+		cfg.instances[key].level.SetLevel(zapcore.Level(newLevel))
 	}
 }
 
-func (s *Singleton) Trace(msg string, fields ...Field) {
-	s.RLock()
-	defer s.RUnlock()
-	for _, logInstance := range s.loggers {
-		if logInstance.enabled.Load() {
-			logInstance.logger.Debug(msg, fieldsToZapFields(fields...)...)
-		}
-	}
-}
-
-func (s *Singleton) Debug(msg string, fields ...Field) {
-	s.RLock()
-	defer s.RUnlock()
-	for _, logInstance := range s.loggers {
-		if logInstance.enabled.Load() {
-			logInstance.logger.Debug(msg, fieldsToZapFields(fields...)...)
-		}
-	}
-}
-
-func (s *Singleton) Info(msg string, fields ...Field) {
-	s.RLock()
-	defer s.RUnlock()
-	for _, logInstance := range s.loggers {
-		if logInstance.enabled.Load() {
-			logInstance.logger.Info(msg, fieldsToZapFields(fields...)...)
-		}
-	}
-}
-
-func (s *Singleton) InfoIgnoreCancel(ctx context.Context, msg string, fields ...Field) {
-	if ctx.Err() != nil {
-		return
-	}
-	s.Info(msg, fields...)
-}
-
-func (s *Singleton) Warn(msg string, fields ...Field) {
-	s.RLock()
-	defer s.RUnlock()
-	for _, logInstance := range s.loggers {
-		if logInstance.enabled.Load() {
-			logInstance.logger.Warn(msg, fieldsToZapFields(fields...)...)
-		}
-	}
-}
-
-func (s *Singleton) WarnIgnoreCancel(ctx context.Context, msg string, fields ...Field) {
-	if ctx.Err() != nil {
-		return
-	}
-	s.Warn(msg, fields...)
-}
-
-func (s *Singleton) Error(msg string, fields ...Field) {
-	s.RLock()
-	defer s.RUnlock()
-	for _, logInstance := range s.loggers {
-		if logInstance.enabled.Load() {
-			logInstance.logger.Error(msg, fieldsToZapFields(fields...)...)
-		}
-	}
-}
-
-func (s *Singleton) ErrorIgnoreCancel(ctx context.Context, msg string, fields ...Field) {
-	if ctx.Err() != nil {
-		return
-	}
-	s.Error(msg, fields...)
-}
-
-func (s *Singleton) Panic(msg string, fields ...Field) {
-	s.RLock()
-	defer s.RUnlock()
-	var foundLogger bool
-	for _, logInstance := range s.loggers {
-		if logInstance.enabled.Load() {
-			foundLogger = true
-			logInstance.logger.Panic(msg, fieldsToZapFields(fields...)...)
-		}
-	}
-	if !foundLogger {
-		panic(msg)
-	}
-}
-
-func (s *Singleton) DPanic(msg string, fields ...Field) {
-	s.RLock()
-	defer s.RUnlock()
-	var foundLogger bool
-	for _, logInstance := range s.loggers {
-		if logInstance.enabled.Load() {
-			foundLogger = true
-			logInstance.logger.DPanic(msg, fieldsToZapFields(fields...)...)
-		}
-	}
-	if !foundLogger {
-		panic(msg)
-	}
-}
-
-func (s *Singleton) Fatal(msg string, fields ...Field) {
-	s.RLock()
-	defer s.RUnlock()
-	var foundLogger bool
-	for _, logInstance := range s.loggers {
-		if logInstance.enabled.Load() {
-			foundLogger = true
-			logInstance.logger.Fatal(msg, fieldsToZapFields(fields...)...)
-		}
-	}
-	if !foundLogger {
-		fmt.Println(msg)
-		os.Exit(1)
-	}
-}
-
-// Deprecated: use structured logging instead.
-func (s *Singleton) TraceUnstruct(args ...interface{}) {
-	s.RLock()
-	defer s.RUnlock()
-	for _, logInstance := range s.loggers {
-		if logInstance.enabled.Load() {
-			logInstance.logger.Sugar().Debug(args...)
-		}
-	}
-}
-
-// Deprecated: use structured logging instead.
-func (s *Singleton) DebugUnstruct(args ...interface{}) {
-	s.RLock()
-	defer s.RUnlock()
-	for _, logInstance := range s.loggers {
-		if logInstance.enabled.Load() {
-			logInstance.logger.Sugar().Debug(args...)
-		}
-	}
-}
-
-// Deprecated: use structured logging instead.
-func (s *Singleton) InfoUnstruct(args ...interface{}) {
-	s.RLock()
-	defer s.RUnlock()
-	for _, logInstance := range s.loggers {
-		if logInstance.enabled.Load() {
-			logInstance.logger.Sugar().Info(args...)
-		}
-	}
-}
-
-// Deprecated: use structured logging instead.
-func (s *Singleton) WarnUnstruct(args ...interface{}) {
-	s.RLock()
-	defer s.RUnlock()
-	for _, logInstance := range s.loggers {
-		if logInstance.enabled.Load() {
-			logInstance.logger.Sugar().Warn(args...)
-		}
-	}
-}
-
-// Deprecated: use structured logging instead.
-func (s *Singleton) WarnIgnoreCancelUnstruct(ctx context.Context, args ...interface{}) {
-	if ctx.Err() != nil {
-		return
-	}
-	s.WarnUnstruct(args)
-}
-
-// Deprecated: use structured logging instead.
-func (s *Singleton) ErrorUnstruct(args ...interface{}) {
-	s.RLock()
-	defer s.RUnlock()
-	for _, logInstance := range s.loggers {
-		if logInstance.enabled.Load() {
-			logInstance.logger.Sugar().Error(args...)
-		}
-	}
-}
-
-// Deprecated: use structured logging instead.
-func (s *Singleton) ErrorIgnoreCancelUnstruct(ctx context.Context, args ...interface{}) {
-	if ctx.Err() != nil {
-		return
-	}
-	s.ErrorUnstruct(args)
-}
-
-// Deprecated: use structured logging instead.
-func (s *Singleton) PanicUnstruct(args ...interface{}) {
-	s.RLock()
-	defer s.RUnlock()
-	var foundLogger bool
-	for _, logInstance := range s.loggers {
-		if logInstance.enabled.Load() {
-			foundLogger = true
-			logInstance.logger.Sugar().Panic(args...)
-		}
-	}
-	if !foundLogger {
-		if len(args) >= 1 {
-			if str, ok := args[0].(string); ok {
-				panic(str)
-			}
-		}
-	}
-}
-
-// Deprecated: use structured logging instead.
-func (s *Singleton) DPanicUnstruct(args ...interface{}) {
-	s.RLock()
-	defer s.RUnlock()
-	var foundLogger bool
-	for _, logInstance := range s.loggers {
-		if logInstance.enabled.Load() {
-			foundLogger = true
-			logInstance.logger.Sugar().DPanic(args...)
-		}
-	}
-	if !foundLogger {
-		if len(args) >= 1 {
-			if str, ok := args[0].(string); ok {
-				panic(str)
-			}
-		}
-	}
-}
-
-// Deprecated: use structured logging instead.
-func (s *Singleton) FatalUnstruct(args ...interface{}) {
-	s.RLock()
-	defer s.RUnlock()
-	var foundLogger bool
-	for _, logInstance := range s.loggers {
-		if logInstance.enabled.Load() {
-			foundLogger = true
-			logInstance.logger.Sugar().Fatal(args...)
-		}
-	}
-	if !foundLogger {
-		if len(args) >= 1 {
-			if str, ok := args[0].(string); ok {
-				fmt.Println(str)
-			}
-		}
-		os.Exit(1)
-	}
-}
-
-// Deprecated: use structured logging instead.
-func (s *Singleton) TracefUnstruct(format string, args ...interface{}) {
-	s.RLock()
-	defer s.RUnlock()
-	for _, logInstance := range s.loggers {
-		if logInstance.enabled.Load() {
-			logInstance.logger.Sugar().Debugf(format, args...)
-		}
-	}
-}
-
-// Deprecated: use structured logging instead.
-func (s *Singleton) DebugfUnstruct(format string, args ...interface{}) {
-	s.RLock()
-	defer s.RUnlock()
-	for _, logInstance := range s.loggers {
-		if logInstance.enabled.Load() {
-			logInstance.logger.Sugar().Debugf(format, args...)
-		}
-	}
-}
-
-// Deprecated: use structured logging instead.
-func (s *Singleton) InfofUnstruct(format string, args ...interface{}) {
-	s.RLock()
-	defer s.RUnlock()
-	for _, logInstance := range s.loggers {
-		if logInstance.enabled.Load() {
-			logInstance.logger.Sugar().Infof(format, args...)
-		}
-	}
-}
-
-// Deprecated: use structured logging instead.
-func (s *Singleton) WarnfUnstruct(format string, args ...interface{}) {
-	s.RLock()
-	defer s.RUnlock()
-	for _, logInstance := range s.loggers {
-		if logInstance.enabled.Load() {
-			logInstance.logger.Sugar().Warnf(format, args...)
-		}
-	}
-}
-
-// Deprecated: use structured logging instead.
-func (s *Singleton) WarnfIgnoreCancelUnstruct(ctx context.Context, format string, args ...interface{}) {
-	if ctx.Err() != nil {
-		return
-	}
-	s.WarnfUnstruct(format, args)
-}
-
-// Deprecated: use structured logging instead.
-func (s *Singleton) ErrorfUnstruct(format string, args ...interface{}) {
-	s.RLock()
-	defer s.RUnlock()
-	for _, logInstance := range s.loggers {
-		if logInstance.enabled.Load() {
-			logInstance.logger.Sugar().Errorf(format, args...)
-		}
-	}
-}
-
-// Deprecated: use structured logging instead.
-func (s *Singleton) ErrorfIgnoreCancelUnstruct(ctx context.Context, format string, args ...interface{}) {
-	if ctx.Err() != nil {
-		return
-	}
-	s.ErrorfUnstruct(format, args)
-}
-
-// Deprecated: use structured logging instead.
-func (s *Singleton) PanicfUnstruct(format string, args ...interface{}) {
-	s.RLock()
-	defer s.RUnlock()
-	var foundLogger bool
-	for _, logInstance := range s.loggers {
-		if logInstance.enabled.Load() {
-			foundLogger = true
-			logInstance.logger.Sugar().Panicf(format, args...)
-		}
-	}
-	if !foundLogger {
-		panic(fmt.Sprintf(format, args...))
-	}
-}
-
-// Deprecated: use structured logging instead.
-func (s *Singleton) DPanicfUnstruct(format string, args ...interface{}) {
-	s.RLock()
-	defer s.RUnlock()
-	var foundLogger bool
-	for _, logInstance := range s.loggers {
-		if logInstance.enabled.Load() {
-			foundLogger = true
-			logInstance.logger.Sugar().DPanicf(format, args...)
-		}
-	}
-	if !foundLogger {
-		panic(fmt.Sprintf(format, args...))
-	}
-}
-
-// Deprecated: use structured logging instead.
-func (s *Singleton) FatalfUnstruct(format string, args ...interface{}) {
-	s.RLock()
-	defer s.RUnlock()
-	var foundLogger bool
-	for _, logInstance := range s.loggers {
-		if logInstance.enabled.Load() {
-			foundLogger = true
-			logInstance.logger.Sugar().Fatalf(format, args...)
-		}
-	}
-	if !foundLogger {
-		fmt.Println(fmt.Sprintf(format, args...))
-		os.Exit(1)
-	}
-}
-
-// ErrorInLoggerWriter is used by log Writer sinks added with AddLogger() to log messages to standard console & file loggers
+// ErrorInLoggerWriter is used by log Writer sinks added with AddLogger() to log messages to standard console & file instances
 // that are enabled so the error in the logger can be trapped somewhere and without an error loop in the logger that triggered it
-func (s *Singleton) ErrorInLoggerWriter(format string, args ...interface{}) {
-	s.RLock()
-	defer s.RUnlock()
-	if s.loggers[fileKey] != nil && s.loggers[fileKey].enabled.Load() {
-		s.loggers[fileKey].logger.Sugar().Errorf(format, args...)
+func (s *Logger) ErrorInLoggerWriter(format string, args ...interface{}) {
+	cfg := s.config()
+	if cfg.instances[fileKey] != nil && cfg.instances[fileKey].enabled.Load() {
+		cfg.instances[fileKey].logger.Sugar().Errorf(format, args...)
 	}
-	if s.loggers[debugConsoleKey] != nil && s.loggers[debugConsoleKey].enabled.Load() {
-		s.loggers[debugConsoleKey].logger.Sugar().Errorf(format, args...)
+	if cfg.instances[debugConsoleKey] != nil && cfg.instances[debugConsoleKey].enabled.Load() {
+		cfg.instances[debugConsoleKey].logger.Sugar().Errorf(format, args...)
 	}
-	if s.loggers[jsonStdoutKey] != nil && s.loggers[jsonStdoutKey].enabled.Load() {
-		s.loggers[jsonStdoutKey].logger.Sugar().Errorf(format, args...)
+	if cfg.instances[jsonStdoutKey] != nil && cfg.instances[jsonStdoutKey].enabled.Load() {
+		cfg.instances[jsonStdoutKey].logger.Sugar().Errorf(format, args...)
 	}
 }
 
-func (s *Singleton) ErrorInLoggerWriterIgnoreCancel(ctx context.Context, format string, args ...interface{}) {
+func (s *Logger) ErrorInLoggerWriterIgnoreCancel(ctx context.Context, format string, args ...interface{}) {
 	if ctx.Err() != nil {
 		return
 	}
 	s.ErrorInLoggerWriter(format, args)
 }
 
-func (s *Singleton) IsLevelEnabled(level Level) bool {
-	s.RLock()
-	defer s.RUnlock()
-	for _, logInstance := range s.loggers {
+func (s *Logger) IsLevelEnabled(level Level) bool {
+	cfg := s.config()
+	for _, logInstance := range cfg.instances {
 		if level >= Level(logInstance.level.Level()) {
 			return true
 		}
