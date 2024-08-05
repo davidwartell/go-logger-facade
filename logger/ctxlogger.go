@@ -116,7 +116,9 @@ func (s *ContextLogger) Info(msg string, fields ...Field) {
 }
 
 func (s *ContextLogger) InfoIgnoreCancel(ctx context.Context, msg string, fields ...Field) {
-
+	if ctx.Err() != nil {
+		return
+	}
 	if s.fields != nil {
 		fields = append(fields, s.fields.fields...)
 	}
