@@ -122,6 +122,9 @@ func (s *ContextLogger) InfoIgnoreCancel(ctx context.Context, msg string, fields
 	if s.fields != nil {
 		fields = append(fields, s.fields.fields...)
 	}
+	if fieldsContainContextCancelled(fields...) {
+		return
+	}
 	cfg := s.logger.config()
 	for _, logInstance := range cfg.instances {
 		if logInstance.enabled.Load() {
@@ -149,6 +152,9 @@ func (s *ContextLogger) WarnIgnoreCancel(ctx context.Context, msg string, fields
 	if s.fields != nil {
 		fields = append(fields, s.fields.fields...)
 	}
+	if fieldsContainContextCancelled(fields...) {
+		return
+	}
 	cfg := s.logger.config()
 	for _, logInstance := range cfg.instances {
 		if logInstance.enabled.Load() {
@@ -175,6 +181,9 @@ func (s *ContextLogger) ErrorIgnoreCancel(ctx context.Context, msg string, field
 	}
 	if s.fields != nil {
 		fields = append(fields, s.fields.fields...)
+	}
+	if fieldsContainContextCancelled(fields...) {
+		return
 	}
 	cfg := s.logger.config()
 	for _, logInstance := range cfg.instances {

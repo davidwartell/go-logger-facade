@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
+	"strings"
 	"time"
 )
 
@@ -327,3 +328,15 @@ func Error(err error) Field { return Field(zap.Error(err)) }
 //
 //goland:noinspection GoUnusedExportedFunction
 func NamedError(key string, err error) Field { return Field(zap.NamedError(key, err)) }
+
+func fieldsContainContextCancelled(fields ...Field) bool {
+	for i := range fields {
+		if fields[i].Type == zapcore.ErrorType {
+			fieldErr, fieldIsError := fields[i].Interface.(error)
+			if fieldIsError && fieldErr != nil && strings.Contains(fieldErr.Error(), "context canceled") {
+				return true
+			}
+		}
+	}
+	return false
+}

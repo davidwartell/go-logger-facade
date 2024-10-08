@@ -37,6 +37,9 @@ func (s *Logger) InfoIgnoreCancel(ctx context.Context, msg string, fields ...Fie
 	if ctx.Err() != nil {
 		return
 	}
+	if fieldsContainContextCancelled(fields...) {
+		return
+	}
 	s.Info(msg, fields...)
 }
 
@@ -53,6 +56,9 @@ func (s *Logger) WarnIgnoreCancel(ctx context.Context, msg string, fields ...Fie
 	if ctx.Err() != nil {
 		return
 	}
+	if fieldsContainContextCancelled(fields...) {
+		return
+	}
 	s.Warn(msg, fields...)
 }
 
@@ -67,6 +73,9 @@ func (s *Logger) Error(msg string, fields ...Field) {
 
 func (s *Logger) ErrorIgnoreCancel(ctx context.Context, msg string, fields ...Field) {
 	if ctx.Err() != nil {
+		return
+	}
+	if fieldsContainContextCancelled(fields...) {
 		return
 	}
 	s.Error(msg, fields...)
