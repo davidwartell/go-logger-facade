@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
-	"strings"
 	"time"
 )
 
@@ -317,7 +316,11 @@ func Any(key string, value interface{}) Field { return Field(zap.Any(key, value)
 
 // Error is shorthand for the common idiom NamedError("error", err).
 func Error(err error) Field {
-	return Field(zap.String("error", err.Error()))
+	var errStr string
+	if err != nil {
+		errStr = err.Error()
+	}
+	return Field(zap.String("error", errStr))
 }
 
 // NamedError constructs a field that lazily stores err.Error() under the
@@ -332,16 +335,16 @@ func Error(err error) Field {
 func NamedError(key string, err error) Field { return Field(zap.NamedError(key, err)) }
 
 func fieldsContainContextCancelled(fields ...Field) bool {
-	for i := range fields {
-		if fields[i].Type == zapcore.ErrorType {
-			fieldErr, fieldIsError := fields[i].Interface.(error)
-			if fieldIsError && fieldErr != nil && strings.Contains(fieldErr.Error(), "context canceled") {
-				return true
-			}
-		}
-		if fields[i].Type == zapcore.StringType && strings.Contains(fields[i].String, "context canceled") {
-			return true
-		}
-	}
+	//for i := range fields {
+	//	if fields[i].Type == zapcore.ErrorType {
+	//		fieldErr, fieldIsError := fields[i].Interface.(error)
+	//		if fieldIsError && fieldErr != nil && strings.Contains(fieldErr.Error(), "context canceled") {
+	//			return true
+	//		}
+	//	}
+	//	if fields[i].Type == zapcore.StringType && strings.Contains(fields[i].String, "context canceled") {
+	//		return true
+	//	}
+	//}
 	return false
 }
