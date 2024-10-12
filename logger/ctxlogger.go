@@ -52,6 +52,10 @@ func WithFields(ctx context.Context, fs ...Field) context.Context {
 	return context.WithValue(ctx, loggerFieldsContextKey, cfields)
 }
 
+func WithoutFields(ctx context.Context) context.Context {
+	return context.WithValue(ctx, loggerFieldsContextKey, make([]Field, 0))
+}
+
 func OfMust(ctx context.Context) (clogger *ContextLogger) {
 	var err error
 	clogger, err = Of(ctx)
