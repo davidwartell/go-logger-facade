@@ -43,13 +43,29 @@ func WithLogger(ctx context.Context, logger *Logger) context.Context {
 }
 
 func WithFields(ctx context.Context, fs ...Field) context.Context {
-	cfields := new(ContextFields)
+	cFields := new(ContextFields)
+	fieldsMap := make(map[string]Field)
+
+	// add all of the existing fields to a map keyed by the field key
 	existingCFields, found := fieldsOf(ctx)
 	if found {
-		cfields.fields = append(cfields.fields, existingCFields.fields...)
+		for i := range existingCFields.fields {
+			fieldsMap[existingCFields.fields[i].Key] = existingCFields.fields[i]
+		}
 	}
-	cfields.fields = append(cfields.fields, fs...)
-	return context.WithValue(ctx, loggerFieldsContextKey, cfields)
+
+	// add all of the new fields to the map overwriting any existing values with the same key
+	for i := range fs {
+		fieldsMap[fs[i].Key] = fs[i]
+	}
+
+	// convert the map back to a slice
+	for _, v := range fieldsMap {
+		cFields.fields = append(cFields.fields, v)
+	}
+
+	// store the updated fields in a copy of the context
+	return context.WithValue(ctx, loggerFieldsContextKey, cFields)
 }
 
 func WithoutFields(ctx context.Context) context.Context {
