@@ -99,6 +99,10 @@ func fieldsOf(ctx context.Context) (fields *ContextFields, found bool) {
 	return
 }
 
+func (s *ContextLogger) Logger() *Logger {
+	return s.logger
+}
+
 func (s *ContextLogger) Trace(msg string, fields ...Field) {
 	if s.fields != nil {
 		fields = append(fields, s.fields.fields...)
