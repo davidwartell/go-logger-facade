@@ -42,26 +42,28 @@ func WithLogger(ctx context.Context, logger *Logger) context.Context {
 	return context.WithValue(ctx, loggerContextKey, logger)
 }
 
-func WithFields(ctx context.Context, fs ...Field) context.Context {
+func WithFields(ctx context.Context, newFields ...Field) context.Context {
 	cFields := new(ContextFields)
-	fieldsMap := make(map[string]Field)
 
-	// add all of the existing fields to a map keyed by the field key
-	existingCFields, found := fieldsOf(ctx)
-	if found {
-		for i := range existingCFields.fields {
-			fieldsMap[existingCFields.fields[i].Key] = existingCFields.fields[i]
+	// add the existing fields if any
+	if existingCFields, found := fieldsOf(ctx); found {
+		cFields.fields = make([]Field, len(existingCFields.fields))
+		copy(cFields.fields, existingCFields.fields)
+	}
+
+	// loop on new fields and either replace a value with the same key or add it if not found
+	for _, newField := range newFields {
+		var foundKey bool
+		for j := range cFields.fields {
+			if cFields.fields[j].Key == newField.Key {
+				cFields.fields[j] = newField
+				foundKey = true
+				break
+			}
 		}
-	}
-
-	// add all of the new fields to the map overwriting any existing values with the same key
-	for i := range fs {
-		fieldsMap[fs[i].Key] = fs[i]
-	}
-
-	// convert the map back to a slice
-	for _, v := range fieldsMap {
-		cFields.fields = append(cFields.fields, v)
+		if !foundKey {
+			cFields.fields = append(cFields.fields, newField)
+		}
 	}
 
 	// store the updated fields in a copy of the context
